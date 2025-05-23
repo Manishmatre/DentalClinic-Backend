@@ -19,7 +19,7 @@ import {
     validateResetPassword,
     validateUpdateProfile 
 } from '../validations/authValidation.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticate as authenticateToken } from '../middleware/auth.js';
 import { validateRequest } from '../middleware/validate.js';
 
 const router = express.Router();
