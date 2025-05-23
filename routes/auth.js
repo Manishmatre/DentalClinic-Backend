@@ -19,7 +19,7 @@ import {
     validateResetPassword,
     validateUpdateProfile 
 } from '../validations/authValidation.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
 import { validateRequest } from '../middleware/validate.js';
 
 const router = express.Router();
@@ -33,7 +33,7 @@ router.post('/reset-password-request', validateForgotPassword, validateRequest, 
 router.post('/reset-password', validateResetPassword, validateRequest, resetPassword);
 
 // Protected routes
-router.use(authenticateToken);
+router.use(authenticate);
 router.get('/profile', getProfile);
 router.put('/profile', validateUpdateProfile, validateRequest, updateProfile);
 router.post('/register-staff', validateRegister, validateRequest, registerStaff);
