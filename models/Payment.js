@@ -104,7 +104,7 @@ PaymentSchema.index({ clinicId: 1, status: 1 });
 PaymentSchema.index({ patient: 1, status: 1 });
 PaymentSchema.index({ doctor: 1, status: 1 });
 PaymentSchema.index({ createdAt: 1 });
-PaymentSchema.index({ paymentId: 1 }, { unique: true });
+// Note: paymentId is already indexed via unique: true in the field definition
 
 // Method to check if payment is refundable
 PaymentSchema.methods.isRefundable = function() {
