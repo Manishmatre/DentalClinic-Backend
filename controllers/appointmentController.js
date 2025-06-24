@@ -36,7 +36,7 @@ const checkAppointmentAccess = (appointment, user) => {
   return false;
 };
 
-// Helper function to validate appointment time with more flexibility for testing
+// Helper function to validate appointment time
 const validateAppointmentTime = (startTime, endTime) => {
   const start = new Date(startTime);
   const end = new Date(endTime);
@@ -55,33 +55,22 @@ const validateAppointmentTime = (startTime, endTime) => {
     throw new Error('End time must be after start time');
   }
 
-  // Check if appointment duration is reasonable (increased to 8 hours for flexibility)
+  // Check if appointment duration is reasonable
   const durationInHours = (end - start) / (1000 * 60 * 60);
-  if (durationInHours > 8) {
-    throw new Error('Appointment duration cannot exceed 8 hours');
+  if (durationInHours > 4) {
+    throw new Error('Appointment duration cannot exceed 4 hours');
   }
   
-  // For development/testing - log but don't enforce these validations
-  // Remove time from dates for past date comparison
-  const startDate = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  if (startDate < nowDate) {
-    console.warn('Warning: Creating appointment for past date');
-    // Don't throw error for testing purposes
+  // Validate appointment is not in the past
+  if (start < now) {
+    throw new Error('Cannot schedule appointments in the past');
   }
 
-  if (start < now && start.getDate() === now.getDate()) {
-    console.warn('Warning: Creating appointment for earlier time today');
-    // Don't throw error for testing purposes
-  }
-
-  // Log but don't enforce business hours for testing
+  // Validate business hours (8 AM - 6 PM)
   const startHour = start.getHours();
   const endHour = end.getHours();
   if (startHour < 8 || endHour > 18) {
-    console.warn('Warning: Appointment scheduled outside business hours (8 AM - 6 PM)');
-    // Don't throw error for testing purposes
+    throw new Error('Appointments can only be scheduled between 8 AM and 6 PM');
   }
 };
 
@@ -111,12 +100,9 @@ const checkConflictingAppointments = async (doctorId, startTime, endTime, clinic
 // Create a new appointment
 export const createAppointment = async (req, res) => {
   try {
-    console.log('Appointment creation request received:', req.body);
-    
-    // Extract data from request body
     const { patientId, doctorId, startTime, endTime, serviceType, notes, status } = req.body;
     
-    // Get clinic ID from request body first, then fall back to user context
+    // Get clinic ID from request body or user context
     let clinicId = req.body.clinicId;
     if (!clinicId && req.user) {
       clinicId = req.user.clinicId;
@@ -124,124 +110,68 @@ export const createAppointment = async (req, res) => {
     
     const createdBy = req.user ? req.user._id : null;
 
-    // Basic validation including clinic ID
+    // Validate required fields
     if (!clinicId) {
-      return res.status(400).json({ message: 'Missing clinic information. Please log in again.' });
+      return res.status(400).json({ message: 'Missing clinic information' });
     }
 
     if (!patientId || !doctorId || !startTime || !endTime || !serviceType) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
-    // TEMPORARY: More flexible clinic validation for testing
-    let clinic;
-    try {
-      clinic = await Clinic.findById(clinicId);
-      if (!clinic) {
-        console.warn(`Clinic with ID ${clinicId} not found, but proceeding anyway for testing`);
-        // Create a mock clinic object for testing
-        clinic = {
-          _id: clinicId,
-          name: 'Test Clinic',
-          status: 'active'
-        };
-      }
-    } catch (clinicError) {
-      console.error('Error finding clinic:', clinicError);
-      console.warn('Proceeding with appointment creation despite clinic validation error');
-      // Create a mock clinic for testing
-      clinic = {
-        _id: clinicId,
-        name: 'Test Clinic',
-        status: 'active'
-      };
+    // Validate clinic exists and is active
+    const clinic = await Clinic.findById(clinicId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'Clinic not found' });
+    }
+    if (clinic.status !== 'active') {
+      return res.status(400).json({ message: 'Clinic is not active' });
     }
 
+    // Validate appointment time
     try {
       validateAppointmentTime(startTime, endTime);
     } catch (validationError) {
       return res.status(400).json({ message: validationError.message });
     }
 
-    // Log the IDs we're searching for to help with debugging
-    console.log('Searching for patient with ID:', patientId);
-    console.log('Searching for doctor with ID:', doctorId);
-    console.log('Using clinic ID:', clinicId);
-    
-    // More flexible validation - first try exact match, then try more flexible search
-    let patient = await User.findOne({ _id: patientId, clinicId, role: 'Patient' });
-    let doctor = await User.findOne({ _id: doctorId, clinicId, role: 'Doctor' });
-    
-    // If not found, try without role restriction
+    // Validate patient exists and belongs to clinic
+    const patient = await User.findOne({ 
+      _id: patientId, 
+      clinicId, 
+      role: 'Patient',
+      status: 'active'
+    });
     if (!patient) {
-      console.log('Patient not found with role restriction, trying without role...');
-      patient = await User.findOne({ _id: patientId, clinicId });
+      return res.status(404).json({ message: 'Patient not found or inactive' });
     }
-    
-    if (!doctor) {
-      console.log('Doctor not found with role restriction, trying without role...');
-      doctor = await User.findOne({ _id: doctorId, clinicId });
-    }
-    
-    // If still not found, try with just the IDs
-    if (!patient) {
-      console.log('Patient still not found, trying with just ID...');
-      patient = await User.findById(patientId);
-    }
-    
-    if (!doctor) {
-      console.log('Doctor still not found, trying with just ID...');
-      doctor = await User.findById(doctorId);
-    }
-    
-    // TEMPORARY: For testing purposes, create mock patient and doctor if not found
-    if (!patient) {
-      console.warn(`Patient with ID ${patientId} not found, creating mock patient for testing`);
-      patient = {
-        _id: patientId,
-        name: 'Test Patient',
-        email: 'patient@test.com',
-        role: 'Patient',
-        clinicId: clinicId
-      };
-    }
-    
-    if (!doctor) {
-      console.warn(`Doctor with ID ${doctorId} not found, creating mock doctor for testing`);
-      doctor = {
-        _id: doctorId,
-        name: 'Test Doctor',
-        email: 'doctor@test.com',
-        role: 'Doctor',
-        clinicId: clinicId
-      };
-    }
-    
-    console.log('Using patient:', patient);
-    console.log('Using doctor:', doctor);
 
-    // TEMPORARY: Skip conflicting appointments check for testing
-    console.log('TEMPORARY: Skipping conflicting appointments check for testing purposes');
-    /*
-    const conflictingAppointment = await checkConflictingAppointments(doctorId, startTime, endTime, clinicId);
-    if (conflictingAppointment) {
-      return res.status(409).json({
-        message: 'Doctor already has an appointment during this time',
+    // Validate doctor exists and belongs to clinic
+    const doctor = await User.findOne({ 
+      _id: doctorId, 
+      clinicId, 
+      role: 'Doctor',
+      status: 'active'
+    });
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found or inactive' });
+    }
+
+    // Check for conflicting appointments
+    const conflict = await checkConflictingAppointments(doctorId, startTime, endTime, clinicId);
+    if (conflict) {
+      return res.status(409).json({ 
+        message: 'Time slot conflicts with existing appointment',
         conflict: {
-          startTime: conflictingAppointment.startTime,
-          endTime: conflictingAppointment.endTime,
-          patientName: patient.name
+          startTime: conflict.startTime,
+          endTime: conflict.endTime,
+          patientName: conflict.patientId.name
         }
       });
     }
-    */
 
-    // Create the new appointment with the provided status or default to 'Scheduled'
-    // Ensure reason field is always provided (it's required by the schema)
-    const reason = req.body.reason || notes || serviceType || 'Medical appointment';
-    console.log('Using reason for appointment:', reason);
-    
-    const newAppointment = new Appointment({
+    // Create appointment
+    const appointment = new Appointment({
       clinicId,
       patientId,
       doctorId,
@@ -249,67 +179,34 @@ export const createAppointment = async (req, res) => {
       endTime,
       serviceType,
       notes,
-      reason, // Explicitly include reason field
-      createdBy,
-      status: status || 'Scheduled'
+      status: status || 'Scheduled',
+      createdBy
     });
-    
-    console.log('Creating new appointment:', newAppointment);
 
+    await appointment.save();
+
+    // Send confirmation email
     try {
-      // Save the appointment to the database
-      const savedAppointment = await newAppointment.save();
-      console.log('Appointment saved successfully:', savedAppointment._id);
-      
-      // Populate necessary fields before sending response
-      const populatedAppointment = await Appointment.findById(savedAppointment._id)
-        .populate('patientId', 'name email')
-        .populate('doctorId', 'name email')
-        .populate('clinicId', 'name');
-      
-      console.log('Populated appointment:', populatedAppointment);
-
-      // TEMPORARY: Skip email notifications for testing
-      console.log('TEMPORARY: Skipping email notifications for testing purposes');
-      /*
-      try {
-        const appointmentDetails = {
-          date: new Date(startTime).toLocaleDateString(),
-          time: `${new Date(startTime).toLocaleTimeString()} - ${new Date(endTime).toLocaleTimeString()}`,
-          doctor: doctor.name,
-          service: serviceType
-        };
-
-        // Only send emails if both patient and doctor have email addresses
-        if (patient.email && doctor.email) {
-          await Promise.all([
-            sendAppointmentConfirmation(patient.email, appointmentDetails),
-            sendAppointmentConfirmation(doctor.email, appointmentDetails)
-          ]);
-          console.log('Appointment confirmation emails sent successfully');
-        } else {
-          console.log('Skipping email notifications - missing email addresses');
-        }
-      } catch (emailError) {
-        console.error('Failed to send appointment notification emails:', emailError);
-        // Continue with the response even if email sending fails
-      }
-      */
-
-      // Return the populated appointment with a 201 Created status
-      return res.status(201).json({
-        success: true,
-        message: 'Appointment created successfully',
-        appointment: populatedAppointment
-      });
+      await sendAppointmentConfirmation(appointment);
+    } catch (emailError) {
+      console.error('Failed to send confirmation email:', emailError);
+      // Don't fail the request if email fails
     }
-    catch (saveError) {
-      console.error('Error saving appointment:', saveError);
-      return res.status(500).json({ message: 'Failed to save appointment', error: saveError.message });
-    }
+
+    res.status(201).json({
+      message: 'Appointment created successfully',
+      appointment: await appointment.populate([
+        { path: 'patientId', select: 'name email phone' },
+        { path: 'doctorId', select: 'name email specialization' }
+      ])
+    });
+
   } catch (error) {
     console.error('Error creating appointment:', error);
-    res.status(500).json({ message: 'Failed to create appointment', error: error.message });
+    res.status(500).json({ 
+      message: 'Failed to create appointment',
+      error: error.message 
+    });
   }
 };
 
@@ -349,18 +246,44 @@ export const getAppointments = async (req, res) => {
 
     // Find appointments with full population of related data
     const appointments = await Appointment.find(query)
-      .populate('patientId', 'name email phone')
-      .populate('doctorId', 'name email specialty')
+      .populate('patientId', 'name email phone firstName lastName')
+      .populate('doctorId', 'name email specialty specialization firstName lastName')
       .populate('clinicId', 'name address')
       .sort({ startTime: 1 });
       
     // Transform the data to make it more frontend-friendly
     const transformedAppointments = appointments.map(apt => {
       const doc = apt.toObject();
+      
+      // Determine patient name with multiple fallbacks
+      const patientName = doc.patientName || 
+                         (doc.patientId?.name) || 
+                         (doc.patientId?.firstName && doc.patientId?.lastName ? 
+                          `${doc.patientId.firstName} ${doc.patientId.lastName}` : null) ||
+                         'Unknown Patient';
+      
+      // Determine doctor name with multiple fallbacks
+      const doctorName = doc.doctorName || 
+                        (doc.doctorId?.name) || 
+                        (doc.doctorId?.firstName && doc.doctorId?.lastName ? 
+                         `${doc.doctorId.firstName} ${doc.doctorId.lastName}` : null) ||
+                        'Unknown Doctor';
+      
+      // Determine patient phone with fallbacks
+      const patientPhone = doc.patientPhone || (doc.patientId?.phone) || null;
+      
+      // Determine doctor specialization with fallbacks
+      const specialization = doc.specialization || 
+                            doc.doctorId?.specialization || 
+                            doc.doctorId?.specialty || 
+                            null;
+      
       return {
         ...doc,
-        patientName: doc.patientId?.name || 'Unknown Patient',
-        doctorName: doc.doctorId?.name || 'Unknown Doctor',
+        patientName,
+        doctorName,
+        patientPhone,
+        specialization,
         clinicName: doc.clinicId?.name || 'Unknown Clinic'
       };
     });
@@ -381,8 +304,8 @@ export const getAppointmentById = async (req, res) => {
     }
 
     const appointment = await Appointment.findById(id)
-      .populate('patientId', 'name email phone dateOfBirth gender')
-      .populate('doctorId', 'name email specialty')
+      .populate('patientId', 'name email phone dateOfBirth gender firstName lastName')
+      .populate('doctorId', 'name email specialty specialization firstName lastName')
       .populate('clinicId', 'name address');
 
     if (!appointment) {
@@ -391,10 +314,36 @@ export const getAppointmentById = async (req, res) => {
     
     // Transform to frontend-friendly format
     const doc = appointment.toObject();
+    
+    // Determine patient name with multiple fallbacks
+    const patientName = doc.patientName || 
+                       (doc.patientId?.name) || 
+                       (doc.patientId?.firstName && doc.patientId?.lastName ? 
+                        `${doc.patientId.firstName} ${doc.patientId.lastName}` : null) ||
+                       'Unknown Patient';
+    
+    // Determine doctor name with multiple fallbacks
+    const doctorName = doc.doctorName || 
+                      (doc.doctorId?.name) || 
+                      (doc.doctorId?.firstName && doc.doctorId?.lastName ? 
+                       `${doc.doctorId.firstName} ${doc.doctorId.lastName}` : null) ||
+                      'Unknown Doctor';
+    
+    // Determine patient phone with fallbacks
+    const patientPhone = doc.patientPhone || (doc.patientId?.phone) || null;
+    
+    // Determine doctor specialization with fallbacks
+    const specialization = doc.specialization || 
+                          doc.doctorId?.specialization || 
+                          doc.doctorId?.specialty || 
+                          null;
+    
     const transformedAppointment = {
       ...doc,
-      patientName: doc.patientId?.name || 'Unknown Patient',
-      doctorName: doc.doctorId?.name || 'Unknown Doctor',
+      patientName,
+      doctorName,
+      patientPhone,
+      specialization,
       clinicName: doc.clinicId?.name || 'Unknown Clinic'
     };
 
@@ -600,50 +549,66 @@ export const updateAppointment = async (req, res) => {
 export const deleteAppointment = async (req, res) => {
   try {
     const { id } = req.params;
-    const clinicId = req.user.clinicId;
+    const { clinicId } = req.query; // Get clinicId from query params
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: 'Invalid appointment ID format' });
+      return res.status(400).json({ 
+        error: true,
+        message: 'Invalid appointment ID format' 
+      });
     }
 
     // Find the appointment first to check access
     const appointment = await Appointment.findById(id);
     if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
+      return res.status(404).json({ 
+        error: true,
+        message: 'Appointment not found' 
+      });
     }
 
-    // Check if user has permission to delete this appointment
-    if (!checkAppointmentAccess(appointment, req.user) || !['Admin', 'Receptionist'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'You do not have permission to delete this appointment' });
+    // Debug logging
+    console.log('Delete Appointment Debug:', {
+      userId: req.user._id,
+      userRole: req.user.role,
+      userClinicId: req.user.clinicId,
+      appointmentClinicId: appointment.clinicId,
+      requestedClinicId: clinicId
+    });
+
+    // Check if user has permission to delete
+    const hasPermission = 
+      // Admin can delete any appointment in their clinic
+      (req.user.role === 'Admin' && String(req.user.clinicId) === String(appointment.clinicId)) ||
+      // Receptionist can delete appointments they created or are assigned to
+      (req.user.role === 'Receptionist' && 
+        (String(req.user.clinicId) === String(appointment.clinicId)) &&
+        (String(req.user._id) === String(appointment.createdBy) || 
+         String(req.user._id) === String(appointment.assignedTo)));
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        error: true,
+        message: 'Permission denied',
+        details: 'You do not have permission to delete this appointment. Please ensure you are an Admin or Receptionist in the same clinic.'
+      });
     }
 
+    // Delete the appointment
     await Appointment.findByIdAndDelete(id);
-    
-    // Notify affected parties about cancellation
-    try {
-      const appointmentDetails = {
-        date: new Date(appointment.startTime).toLocaleDateString(),
-        time: `${new Date(appointment.startTime).toLocaleTimeString()} - ${new Date(appointment.endTime).toLocaleTimeString()}`,
-        status: 'Cancelled'
-      };
 
-      const [patient, doctor] = await Promise.all([
-        User.findById(appointment.patientId),
-        User.findById(appointment.doctorId)
-      ]);
+    res.status(200).json({
+      success: true,
+      message: 'Appointment deleted successfully'
+    });
 
-      await Promise.all([
-        patient?.email && sendAppointmentConfirmation(patient.email, appointmentDetails),
-        doctor?.email && sendAppointmentConfirmation(doctor.email, appointmentDetails)
-      ]);
-    } catch (emailError) {
-      console.error('Failed to send appointment cancellation notifications:', emailError);
-    }
-
-    res.status(200).json({ message: 'Appointment deleted successfully' });
   } catch (error) {
     console.error('Error deleting appointment:', error);
-    res.status(500).json({ message: 'Failed to delete appointment', error: error.message });
+    res.status(500).json({
+      error: true,
+      message: 'Error deleting appointment',
+      details: error.message
+    });
   }
 };
 
@@ -949,14 +914,25 @@ export const sendReminder = async (req, res) => {
 export const getAppointmentStats = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const clinicId = req.user.clinicId;
+    
+    // Get clinic ID from user context
+    const clinicId = req.user?.clinicId;
+    if (!clinicId) {
+      return res.status(400).json({ 
+        message: 'Clinic ID is required',
+        details: 'User must be associated with a clinic'
+      });
+    }
 
     // Validate date range
     const start = startDate ? new Date(startDate) : new Date(new Date().setDate(new Date().getDate() - 30)); // Default to last 30 days
     const end = endDate ? new Date(endDate) : new Date();
 
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      return res.status(400).json({ message: 'Invalid date format' });
+      return res.status(400).json({ 
+        message: 'Invalid date format',
+        details: 'startDate and endDate must be valid dates'
+      });
     }
 
     // Set end date to end of day
@@ -1062,7 +1038,11 @@ export const getAppointmentStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating appointment statistics:', error);
-    res.status(500).json({ message: 'Failed to generate statistics', error: error.message });
+    res.status(500).json({ 
+      message: 'Failed to generate statistics',
+      error: error.message,
+      details: 'An error occurred while processing the request'
+    });
   }
 };
 
@@ -1143,5 +1123,121 @@ export const getAvailableTimeSlots = async (req, res) => {
   } catch (error) {
     console.error('Error fetching available time slots:', error);
     res.status(500).json({ message: 'Failed to fetch available time slots', error: error.message });
+  }
+};
+
+// Get doctor's queue
+export const getDoctorQueue = async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const clinicId = req.user.clinicId;
+
+    if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+      return res.status(400).json({
+        error: true,
+        message: 'Invalid doctor ID format'
+      });
+    }
+
+    const queue = await Appointment.find({
+      doctorId,
+      clinicId,
+      status: 'scheduled',
+      startTime: { $lte: new Date() }
+    })
+    .sort({ startTime: 1 })
+    .populate('patientId', 'firstName lastName')
+    .populate('doctorId', 'firstName lastName');
+
+    res.status(200).json({
+      success: true,
+      data: queue
+    });
+  } catch (error) {
+    console.error('Error getting doctor queue:', error);
+    res.status(500).json({
+      error: true,
+      message: 'Error getting doctor queue',
+      details: error.message
+    });
+  }
+};
+
+// Update queue position
+export const updateQueuePosition = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    const { newPosition } = req.body;
+    const clinicId = req.user.clinicId;
+
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return res.status(400).json({
+        error: true,
+        message: 'Invalid appointment ID format'
+      });
+    }
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) {
+      return res.status(404).json({
+        error: true,
+        message: 'Appointment not found'
+      });
+    }
+
+    // Check if user has permission to update queue
+    const hasPermission = 
+      req.user.role === 'Admin' || 
+      req.user.role === 'Receptionist' ||
+      (req.user.role === 'Doctor' && String(req.user._id) === String(appointment.doctorId));
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        error: true,
+        message: 'Permission denied',
+        details: 'You do not have permission to update the queue'
+      });
+    }
+
+    // Get all appointments for the doctor on the same day
+    const startOfDay = new Date(appointment.startTime);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const appointments = await Appointment.find({
+      doctorId: appointment.doctorId,
+      clinicId,
+      startTime: { $gte: startOfDay, $lte: endOfDay },
+      status: 'scheduled'
+    }).sort({ startTime: 1 });
+
+    // Update appointment times based on new position
+    const appointmentDuration = 30; // minutes
+    const baseTime = new Date(startOfDay);
+    baseTime.setHours(9, 0, 0, 0); // Start at 9 AM
+
+    appointments.forEach((apt, index) => {
+      if (index === newPosition) {
+        appointment.startTime = new Date(baseTime);
+        appointment.endTime = new Date(baseTime.getTime() + appointmentDuration * 60000);
+      }
+      baseTime.setMinutes(baseTime.getMinutes() + appointmentDuration);
+    });
+
+    await appointment.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Queue position updated successfully',
+      data: appointment
+    });
+  } catch (error) {
+    console.error('Error updating queue position:', error);
+    res.status(500).json({
+      error: true,
+      message: 'Error updating queue position',
+      details: error.message
+    });
   }
 };

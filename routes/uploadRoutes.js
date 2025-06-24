@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
 import { 
   uploadFile, 
   uploadMultipleFiles, 
@@ -25,7 +25,7 @@ import {
 const router = express.Router();
 
 // Apply authentication middleware to all routes
-router.use(protect);
+router.use(authenticate);
 
 // Basic upload routes with type param
 router.post('/:type', imageUpload.single('file'), uploadFile);

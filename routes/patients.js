@@ -63,7 +63,7 @@ router.get('/', auth, async (req, res) => {
 // @route   POST api/patients
 // @desc    Create a patient
 // @access  Private
-router.post('/', async (req, res) => { // Temporarily removed auth middleware
+router.post('/', auth, async (req, res) => { 
   try {
     console.log('Received patient creation request:', req.body);
     
@@ -132,7 +132,10 @@ router.put('/:id', auth, async (req, res) => {
     }
 
     // Verify the patient belongs to the user's clinic
-    if (patient.clinicId.toString() !== req.user.clinicId.toString()) {
+    // Allow access if user is admin or if the patient belongs to the user's clinic
+    if (req.user.role !== 'Admin' && patient.clinicId && 
+        req.user.clinicId && patient.clinicId.toString() !== req.user.clinicId.toString()) {
+      console.log('Access denied for update: User clinic ID:', req.user.clinicId, 'Patient clinic ID:', patient.clinicId);
       return res.status(403).json({ message: 'Not authorized to update this patient' });
     }
 
@@ -190,7 +193,10 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     // Verify the patient belongs to the user's clinic
-    if (patient.clinicId.toString() !== req.user.clinicId.toString()) {
+    // Allow access if user is admin or if the patient belongs to the user's clinic
+    if (req.user.role !== 'Admin' && patient.clinicId && 
+        req.user.clinicId && patient.clinicId.toString() !== req.user.clinicId.toString()) {
+      console.log('Access denied for delete: User clinic ID:', req.user.clinicId, 'Patient clinic ID:', patient.clinicId);
       return res.status(403).json({ message: 'Not authorized to delete this patient' });
     }
 
@@ -214,7 +220,10 @@ router.get('/:id', auth, async (req, res) => {
     }
 
     // Verify the patient belongs to the user's clinic
-    if (patient.clinicId.toString() !== req.user.clinicId.toString()) {
+    // Allow access if user is admin or if the patient belongs to the user's clinic
+    if (req.user.role !== 'Admin' && patient.clinicId && 
+        req.user.clinicId && patient.clinicId.toString() !== req.user.clinicId.toString()) {
+      console.log('Access denied: User clinic ID:', req.user.clinicId, 'Patient clinic ID:', patient.clinicId);
       return res.status(403).json({ message: 'Not authorized to view this patient' });
     }
 

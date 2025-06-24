@@ -13,9 +13,9 @@ const InventoryItemSchema = new Schema({
     trim: true
   },
   category: {
-    type: String,
-    required: [true, 'Category is required'],
-    enum: ['Medication', 'Medical Supply', 'Equipment', 'Office Supply', 'Other']
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    required: [true, 'Category is required']
   },
   description: {
     type: String,
@@ -52,6 +52,24 @@ const InventoryItemSchema = new Schema({
   location: {
     type: String,
     trim: true
+  },
+  dentalSpecific: {
+    shade: {
+      type: String,
+      trim: true
+    },
+    size: {
+      type: String,
+      trim: true
+    },
+    sterilizable: {
+      type: Boolean,
+      default: false
+    },
+    expiryNotificationDays: {
+      type: Number,
+      default: 30
+    }
   },
   supplier: {
     name: {

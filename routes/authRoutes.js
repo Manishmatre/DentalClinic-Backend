@@ -12,7 +12,8 @@ import {
   getProfile,
   sendSupportEmail,
   getStaffRequests,
-  processStaffRequest
+  processStaffRequest,
+  autoVerifyStaff
 } from '../controllers/authController.js';
 import { authenticate } from '../middleware/auth.js';
 import { authorizeRoles, authorizeClinic } from '../middleware/authorizeRoles.js';
@@ -29,6 +30,7 @@ router.post('/login', loginRateLimiter, login);
 router.post('/logout', logout);
 router.get('/verify-email/:token', verifyEmail);
 router.post('/resend-verification', resendVerification);
+router.post('/auto-verify-staff', autoVerifyStaff);
 router.post('/reset-password-request', resetPasswordRequest);
 router.post('/reset-password/:token', resetPassword);
 

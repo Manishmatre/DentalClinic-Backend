@@ -349,8 +349,42 @@ export const uploadBillingDocument = asyncHandler(async (req, res) => {
 // @route   POST /api/upload/profile-picture
 // @access  Private
 export const uploadProfilePicture = asyncHandler(async (req, res) => {
-  req.params.type = 'profile-picture';
-  return uploadFile(req, res);
+  if (!req.file) {
+    return res.status(400).json({ message: 'No profile image uploaded' });
+  }
+
+  try {
+    // Set folder to clinic_images for profile pictures
+    const folder = 'clinic_images';
+    
+    // File has been uploaded to Cloudinary by multer-storage-cloudinary
+    const { originalname, mimetype, size, path: filePath, filename } = req.file;
+    
+    // Log the file details for debugging
+    console.log('Profile image uploaded to Cloudinary:', {
+      originalname,
+      mimetype,
+      size,
+      path: filePath,
+      filename
+    });
+    
+    // Return a properly structured response
+    res.status(200).json({
+      message: 'File uploaded successfully',
+      file: {
+        originalname,
+        mimetype,
+        size,
+        url: req.file.path, // Cloudinary URL
+        public_id: req.file.filename, // Cloudinary public ID
+        folder
+      }
+    });
+  } catch (error) {
+    console.error('Profile image upload error:', error);
+    res.status(500).json({ message: 'Server error during profile image upload', error: error.message });
+  }
 });
 
 // @desc    Upload a lab result
@@ -369,15 +403,4 @@ export const uploadPrescription = asyncHandler(async (req, res) => {
   return uploadFile(req, res);
 });
 
-export default {
-  uploadFile,
-  uploadMultipleFiles,
-  deleteFile,
-  uploadDataUrl,
-  getUploadSignature,
-  uploadMedicalRecord,
-  uploadBillingDocument,
-  uploadProfilePicture,
-  uploadLabResult,
-  uploadPrescription
-};
+// Named exports are already defined above

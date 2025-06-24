@@ -59,7 +59,7 @@ const createInventoryItem = asyncHandler(async (req, res) => {
 // @route   GET /api/inventory/items
 // @access  Private (Admin, Doctor, Staff)
 const getInventoryItems = asyncHandler(async (req, res) => {
-  const { category, search, lowStock, status } = req.query;
+  const { category, search, lowStock, status, expiringSoon, supplier, shade, size } = req.query;
   const query = { clinicId: req.user.clinicId };
 
   // Filter by category
@@ -77,11 +77,34 @@ const getInventoryItems = asyncHandler(async (req, res) => {
     query.currentQuantity = { $lte: '$reorderLevel' };
   }
 
+  // Filter by expiring soon
+  if (expiringSoon === 'true') {
+    const today = new Date();
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(today.getDate() + 30);
+    query.expiryDate = { $gte: today, $lte: thirtyDaysFromNow };
+  }
+
+  // Filter by supplier
+  if (supplier) {
+    query['supplier.name'] = { $regex: supplier, $options: 'i' };
+  }
+
+  // Filter by dental-specific fields
+  if (shade) {
+    query['dentalSpecific.shade'] = { $regex: shade, $options: 'i' };
+  }
+
+  if (size) {
+    query['dentalSpecific.size'] = { $regex: size, $options: 'i' };
+  }
+
   // Search by name or item code
   if (search) {
     query.$or = [
       { name: { $regex: search, $options: 'i' } },
-      { itemCode: { $regex: search, $options: 'i' } }
+      { itemCode: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } }
     ];
   }
 
@@ -353,6 +376,112 @@ const getInventoryStats = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Get dental inventory statistics
+// @route   GET /api/inventory/dental-stats
+// @access  Private (Admin)
+const getDentalInventoryStats = asyncHandler(async (req, res) => {
+  const clinicId = req.user.clinicId;
+
+  // Count total dental items
+  const totalDentalItems = await InventoryItem.countDocuments({
+    clinicId,
+    isActive: true,
+    category: { $in: ['Dental Material', 'Dental Instrument', 'Dental Equipment'] }
+  });
+
+  // Count expiring soon items
+  const today = new Date();
+  const thirtyDaysFromNow = new Date();
+  thirtyDaysFromNow.setDate(today.getDate() + 30);
+  
+  const expiringSoonItems = await InventoryItem.countDocuments({
+    clinicId,
+    isActive: true,
+    expiryDate: { $gte: today, $lte: thirtyDaysFromNow }
+  });
+
+  // Count low stock dental items
+  const lowStockDentalItems = await InventoryItem.countDocuments({
+    clinicId,
+    isActive: true,
+    category: { $in: ['Dental Material', 'Dental Instrument', 'Dental Equipment'] },
+    $expr: { $lte: ['$currentQuantity', '$reorderLevel'] }
+  });
+
+  // Get dental category distribution
+  const dentalCategoryDistribution = await InventoryItem.aggregate([
+    { 
+      $match: { 
+        clinicId: mongoose.Types.ObjectId(clinicId), 
+        isActive: true,
+        category: { $in: ['Dental Material', 'Dental Instrument', 'Dental Equipment'] }
+      } 
+    },
+    { $group: { _id: '$category', count: { $sum: 1 } } },
+    { $sort: { count: -1 } }
+  ]);
+
+  // Get top 5 most used dental items (based on transactions)
+  const mostUsedItems = await InventoryTransaction.aggregate([
+    { 
+      $match: { 
+        clinicId: mongoose.Types.ObjectId(clinicId),
+        transactionType: 'Usage'
+      } 
+    },
+    { $group: { _id: '$itemId', totalUsed: { $sum: { $abs: '$quantity' } } } },
+    { $sort: { totalUsed: -1 } },
+    { $limit: 5 },
+    {
+      $lookup: {
+        from: 'inventoryitems',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'itemDetails'
+      }
+    },
+    { $unwind: '$itemDetails' },
+    {
+      $project: {
+        _id: 0,
+        itemId: '$_id',
+        name: '$itemDetails.name',
+        category: '$itemDetails.category',
+        totalUsed: 1
+      }
+    }
+  ]);
+
+  // Get recent dental inventory transactions
+  const recentDentalTransactions = await InventoryTransaction.find({ clinicId })
+    .populate({
+      path: 'itemId',
+      match: { category: { $in: ['Dental Material', 'Dental Instrument', 'Dental Equipment'] } },
+      select: 'name itemCode category'
+    })
+    .populate('performedBy', 'name')
+    .sort({ createdAt: -1 })
+    .limit(10);
+
+  // Filter out transactions where itemId is null (non-dental items)
+  const filteredTransactions = recentDentalTransactions.filter(t => t.itemId);
+
+  res.json({
+    totalDentalItems,
+    lowStockDentalItems,
+    expiringSoonItems,
+    dentalCategoryDistribution,
+    mostUsedItems,
+    recentTransactions: filteredTransactions
+  });
+});
+
+// Helper function to create a transaction (used by other controllers)
+const createTransaction = async (transactionData) => {
+  const transaction = await InventoryTransaction.create(transactionData);
+  return transaction;
+};
+
 export {
   createInventoryItem,
   getInventoryItems,
@@ -362,5 +491,7 @@ export {
   createInventoryTransaction,
   getInventoryTransactions,
   getTransactionsByItem,
-  getInventoryStats
+  getInventoryStats,
+  getDentalInventoryStats,
+  createTransaction
 };

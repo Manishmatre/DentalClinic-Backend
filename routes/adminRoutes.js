@@ -6,9 +6,14 @@ import {
   addExperience, 
   updateSocialLinks,
   updatePreferences,
+  addPaymentMethod,
+  updateNotificationPreferences,
   addService,
   logActivity,
-  logLogin
+  logLogin,
+  getAdminActivity,
+  getLoginHistory,
+  changePassword
 } from '../controllers/adminController.js';
 import { authenticate } from '../middleware/auth.js';
 import { authorizeRoles } from '../middleware/authorizeRoles.js';
@@ -26,6 +31,9 @@ router.put('/profile', updateAdminProfile);
 // Bank account routes
 router.post('/bank-account', addBankAccount);
 
+// Payment method routes
+router.post('/payment-method', addPaymentMethod);
+
 // Experience routes
 router.post('/experience', addExperience);
 
@@ -34,6 +42,7 @@ router.put('/social-links', updateSocialLinks);
 
 // Preferences routes
 router.put('/preferences', updatePreferences);
+router.put('/notification-preferences', updateNotificationPreferences);
 
 // Service routes
 router.post('/service', addService);
@@ -41,5 +50,10 @@ router.post('/service', addService);
 // Activity logging routes
 router.post('/log-activity', logActivity);
 router.post('/log-login', logLogin);
+router.get('/activity', getAdminActivity);
+router.get('/login-history', getLoginHistory);
+
+// Security routes
+router.post('/change-password', changePassword);
 
 export default router;

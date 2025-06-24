@@ -1,14 +1,25 @@
+import Razorpay from 'razorpay';
 import stripe from 'stripe';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import Payment from '../models/Payment.js';
 import Clinic from '../models/Clinic.js';
+import Subscription from '../models/Subscription.js';
+import SubscriptionPlan from '../models/SubscriptionPlan.js';
 import { SubscriptionError } from '../middleware/errorHandler.js';
 
-const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
+// Initialize payment gateways
+const stripeClient = process.env.STRIPE_SECRET_KEY ? stripe(process.env.STRIPE_SECRET_KEY) : null;
+
+const razorpayClient = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET ? 
+  new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+  }) : null;
 
 const paymentService = {
   // Initialize a subscription payment
-  initializePayment: async ({ clinicId, plan, amount, paymentMethod }) => {
+  initializePayment: async ({ clinicId, plan, amount, paymentMethod, billingCycle, currency = 'INR' }) => {
     const paymentId = uuidv4();
     
     const payment = await Payment.create({
@@ -17,10 +28,230 @@ const paymentService = {
       plan,
       amount,
       paymentMethod,
+      currency,
+      billingCycle,
       status: 'pending'
     });
 
     return payment;
+  },
+  
+  // Create Razorpay order for subscription
+  createRazorpayOrder: async ({ clinicId, plan, amount, billingCycle, currency = 'INR' }) => {
+    if (!razorpayClient) {
+      throw new Error('Razorpay is not configured');
+    }
+    
+    try {
+      // Get subscription plan details
+      const subscriptionPlan = await SubscriptionPlan.findOne({ name: plan });
+      if (!subscriptionPlan) {
+        throw new Error('Subscription plan not found');
+      }
+      
+      // Get clinic details
+      const clinic = await Clinic.findById(clinicId);
+      if (!clinic) {
+        throw new Error('Clinic not found');
+      }
+      
+      // Create a unique receipt ID
+      const receiptId = `sub_${clinicId}_${Date.now()}`;
+      
+      // Create Razorpay order
+      const orderOptions = {
+        amount: amount * 100, // Amount in paise
+        currency,
+        receipt: receiptId,
+        notes: {
+          clinicId: clinicId.toString(),
+          plan,
+          billingCycle,
+          clinicName: clinic.name,
+          email: clinic.email
+        }
+      };
+      
+      const order = await razorpayClient.orders.create(orderOptions);
+      
+      // Create a payment record
+      const payment = await Payment.create({
+        paymentId: order.id,
+        clinicId,
+        plan,
+        amount,
+        currency,
+        billingCycle,
+        paymentMethod: 'razorpay',
+        status: 'pending',
+        gatewayOrderId: order.id,
+        receiptId
+      });
+      
+      return {
+        order,
+        payment,
+        key_id: process.env.RAZORPAY_KEY_ID
+      };
+    } catch (error) {
+      console.error('Error creating Razorpay order:', error);
+      throw new SubscriptionError('Failed to create payment order: ' + error.message);
+    }
+  },
+  
+  // Verify Razorpay payment
+  verifyRazorpayPayment: async (paymentData) => {
+    if (!razorpayClient) {
+      throw new Error('Razorpay is not configured');
+    }
+    
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = paymentData;
+      
+      // Verify signature
+      const generated_signature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(razorpay_order_id + '|' + razorpay_payment_id)
+        .digest('hex');
+      
+      if (generated_signature !== razorpay_signature) {
+        throw new Error('Invalid payment signature');
+      }
+      
+      // Find the payment record
+      const payment = await Payment.findOne({ gatewayOrderId: razorpay_order_id });
+      if (!payment) {
+        throw new Error('Payment record not found');
+      }
+      
+      // Update payment status
+      payment.status = 'completed';
+      payment.gatewayPaymentId = razorpay_payment_id;
+      payment.gatewaySignature = razorpay_signature;
+      payment.paidAt = new Date();
+      await payment.save();
+      
+      // Get subscription plan details
+      const subscriptionPlan = await SubscriptionPlan.findOne({ name: payment.plan });
+      if (!subscriptionPlan) {
+        throw new Error('Subscription plan not found');
+      }
+      
+      // Calculate subscription dates
+      const startDate = new Date();
+      let endDate;
+      
+      switch (payment.billingCycle) {
+        case 'monthly':
+          endDate = new Date(startDate);
+          endDate.setMonth(endDate.getMonth() + 1);
+          break;
+        case 'quarterly':
+          endDate = new Date(startDate);
+          endDate.setMonth(endDate.getMonth() + 3);
+          break;
+        case 'annual':
+          endDate = new Date(startDate);
+          endDate.setFullYear(endDate.getFullYear() + 1);
+          break;
+        default:
+          endDate = new Date(startDate);
+          endDate.setMonth(endDate.getMonth() + 1);
+      }
+      
+      // Create or update subscription
+      let subscription = await Subscription.findOne({
+        clinicId: payment.clinicId,
+        status: { $in: ['active', 'trial'] }
+      });
+      
+      if (!subscription) {
+        // Create new subscription
+        subscription = new Subscription({
+          clinicId: payment.clinicId,
+          plan: payment.plan,
+          status: 'active',
+          startDate,
+          endDate,
+          isInTrial: false,
+          autoRenew: true,
+          paymentMethod: 'razorpay',
+          gatewayPaymentId: razorpay_payment_id,
+          features: subscriptionPlan.features,
+          billingCycle: payment.billingCycle,
+          price: {
+            amount: payment.amount,
+            currency: payment.currency
+          },
+          nextBillingDate: endDate,
+          history: [{
+            action: 'created',
+            date: new Date(),
+            details: `Subscription created with ${payment.plan} plan`,
+            paymentId: payment._id
+          }]
+        });
+      } else {
+        // Update existing subscription
+        const prevPlan = subscription.plan;
+        subscription.plan = payment.plan;
+        subscription.status = 'active';
+        subscription.startDate = startDate;
+        subscription.endDate = endDate;
+        subscription.isInTrial = false;
+        subscription.features = subscriptionPlan.features;
+        subscription.billingCycle = payment.billingCycle;
+        subscription.price = {
+          amount: payment.amount,
+          currency: payment.currency
+        };
+        subscription.nextBillingDate = endDate;
+        
+        // Add to subscription history
+        if (!subscription.history) {
+          subscription.history = [];
+        }
+        
+        if (prevPlan !== payment.plan) {
+          subscription.history.push({
+            action: 'plan_changed',
+            date: new Date(),
+            details: `Subscription plan changed from ${prevPlan} to ${payment.plan}`,
+            paymentId: payment._id
+          });
+        } else {
+          subscription.history.push({
+            action: 'renewed',
+            date: new Date(),
+            details: `Subscription renewed for ${payment.billingCycle} billing cycle`,
+            paymentId: payment._id
+          });
+        }
+      }
+      
+      await subscription.save();
+      
+      // Update clinic subscription information
+      const clinic = await Clinic.findById(payment.clinicId);
+      if (clinic) {
+        clinic.subscriptionPlan = payment.plan;
+        clinic.features = subscriptionPlan.features;
+        clinic.subscription = {
+          startDate,
+          endDate,
+          status: 'active',
+          paymentMethod: 'razorpay',
+          lastPayment: new Date()
+        };
+        
+        await clinic.save();
+      }
+      
+      return { payment, subscription };
+    } catch (error) {
+      console.error('Error verifying Razorpay payment:', error);
+      throw new SubscriptionError('Payment verification failed: ' + error.message);
+    }
   },
 
   // Process the payment using Stripe

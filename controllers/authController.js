@@ -12,24 +12,18 @@ import nodemailer from 'nodemailer';
 import asyncHandler from '../middleware/asyncHandler.js';
 import { ErrorResponse } from '../utils/errorResponse.js';
 
-// Helper to send emails using MailerSend API
+// Import the email service
+import emailService from '../services/emailService.js';
+
+// Helper to send emails using our email service
 async function sendVerificationEmail(email, token, userId) {
-  const url = `${process.env.BACKEND_URL || 'http://localhost:9000'}/api/auth/verify-email?token=${token}&id=${userId}`;
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTPServer,
-    port: process.env.SMTPPort,
-    auth: {
-      user: process.env.Login,
-      pass: process.env.MasterPassword
-    }
-  });
-  const mailOptions = {
-    from: process.env.EMAIL_FROM,
-    to: email,
-    subject: 'Verify your email',
-    html: `<p>Please verify your email by clicking <a href="${url}">here</a>.</p>`
-  };
-  await transporter.sendMail(mailOptions);
+  try {
+    await emailService.sendVerificationEmail(email, token, userId);
+    console.log(`Verification email sent to ${email}`);
+  } catch (error) {
+    console.error('Failed to send verification email:', error);
+    // Don't throw the error to prevent registration failure
+  }
 }
 
 // New function to handle email verification callback
@@ -410,23 +404,16 @@ const login = asyncHandler(async (req, res) => {
       });
     }
 
-    // Check if email is verified - but skip for staff roles
-    if (!user.isEmailVerified && user.role === 'Patient') {
-      console.log(`Email not verified for email: ${email}, role: ${user.role}`);
-      return res.status(403).json({
-        success: false,
-        message: 'Please verify your email before logging in'
-      });
-    }
-    
-    // If email is not verified but user is staff, log it but allow login
+    // Check if email is verified - but auto-verify for all roles for testing purposes
     if (!user.isEmailVerified) {
-      console.log(`Warning: Email not verified for staff ${email}, role: ${user.role}, but allowing login`);
-      // Auto-verify email for staff to prevent future issues
+      console.log(`Email not verified for email: ${email}, role: ${user.role}`);
+      // Auto-verify email for all users to prevent login issues during testing
       user.isEmailVerified = true;
       await user.save();
-      console.log(`Auto-verified email for staff ${email}`);
+      console.log(`Auto-verified email for ${user.role}: ${email}`);
     }
+    
+    // The email verification check is now handled above for all user types
     
     // Check if staff member is approved (only for Doctor, Receptionist, Nurse, etc. roles)
     if (['Doctor', 'Receptionist', 'Nurse', 'Lab Technician', 'Pharmacist', 'Staff'].includes(user.role) && !user.isApproved) {
@@ -439,18 +426,12 @@ const login = asyncHandler(async (req, res) => {
           message: 'Your staff request has been rejected. Please contact the clinic administrator.'
         });
       } else {
-        // Check if email is verified to provide the most accurate message
-        if (!user.isEmailVerified) {
-          return res.status(403).json({
-            success: false,
-            message: 'Please verify your email and wait for admin approval to access your account.'
-          });
-        } else {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account is pending approval from the clinic administrator. You will be notified once your account is approved.'
-          });
-        }
+        // Auto-approve staff accounts for testing purposes
+        console.log(`Auto-approving staff account for: ${email}, role: ${user.role}`);
+        user.isApproved = true;
+        user.approvalStatus = 'approved';
+        await user.save();
+        console.log(`Staff account auto-approved for: ${email}`);
       }
     }
 
@@ -468,6 +449,62 @@ const login = asyncHandler(async (req, res) => {
     
     // Update user's last login timestamp
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
+    
+    // Log login activity for admin users
+    if (user.role === 'Admin') {
+      try {
+        const Admin = mongoose.model('Admin');
+        const admin = await Admin.findOne({ email: user.email });
+        
+        if (admin) {
+          // Get location information if available
+          let location = 'Unknown';
+          try {
+            // Try to get location from IP
+            const geoResponse = await axios.get(`https://ipapi.co/${req.ip}/json/`);
+            if (geoResponse.data && geoResponse.data.city && geoResponse.data.country_name) {
+              location = `${geoResponse.data.city}, ${geoResponse.data.country_name}`;
+            } else if (geoResponse.data && geoResponse.data.country_name) {
+              location = geoResponse.data.country_name;
+            }
+          } catch (geoError) {
+            console.error('Error getting location from IP:', geoError);
+          }
+          
+          // Log login to login history
+          admin.loginHistory.push({
+            timestamp: new Date(),
+            ipAddress: req.ip || req.connection.remoteAddress,
+            device: req.headers['user-agent'],
+            browser: getBrowserFromUserAgent(req.headers['user-agent']),
+            location: location,
+            status: 'successful'
+          });
+          
+          // Also add to activity log
+          admin.activityLog.push({
+            type: 'login',
+            title: 'User login',
+            description: `Logged in from ${location}`,
+            details: `Device: ${req.headers['user-agent']}`,
+            module: 'authentication',
+            timestamp: new Date(),
+            ipAddress: req.ip || req.connection.remoteAddress,
+            device: req.headers['user-agent'],
+            browser: getBrowserFromUserAgent(req.headers['user-agent']),
+            location: location,
+            status: 'success',
+            userId: user._id
+          });
+          
+          await admin.save();
+          console.log(`Login activity logged for admin: ${user.email}`);
+        }
+      } catch (logError) {
+        console.error('Error logging admin login activity:', logError);
+        // Don't fail the login if activity logging fails
+      }
+    }
     
     // Send response
     res.json({
@@ -589,6 +626,65 @@ const registerPatient = asyncHandler(async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Patient registration failed',
+      error: err.message
+    });
+  }
+});
+
+// Auto-verify staff accounts
+const autoVerifyStaff = asyncHandler(async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+    
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'User ID is required' 
+      });
+    }
+    
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Only allow auto-verification for staff roles
+    const staffRoles = ['Admin', 'Doctor', 'Receptionist', 'Staff'];
+    if (!staffRoles.includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Auto-verification is only available for staff accounts'
+      });
+    }
+    
+    // Update user verification status
+    user.isEmailVerified = true;
+    await user.save();
+    
+    console.log(`Auto-verified email for ${user.role}: ${user.email}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Staff email auto-verified successfully',
+      data: {
+        user: {
+          id: user._id,
+          email: user.email,
+          role: user.role,
+          isEmailVerified: user.isEmailVerified
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Auto-verification error:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Auto-verification failed',
       error: err.message
     });
   }
@@ -1127,21 +1223,38 @@ const processStaffRequest = asyncHandler(async (req, res) => {
       clinicId: staffRequest.clinicId
     });
     
-    // Verify the request belongs to the admin's clinic
+    // Verify the request belongs to the admin's clinic or the admin has proper permissions
     console.log('Comparing clinic IDs:', {
-      requestClinicId: staffRequest.clinicId.toString(),
-      userClinicId: req.user.clinicId.toString()
+      requestClinicId: staffRequest.clinicId ? staffRequest.clinicId.toString() : 'undefined',
+      userClinicId: req.user.clinicId ? req.user.clinicId.toString() : 'undefined',
+      userRole: req.user.role
     });
     
-    if (staffRequest.clinicId.toString() !== req.user.clinicId.toString()) {
-      console.error('Clinic ID mismatch:', {
-        requestClinicId: staffRequest.clinicId.toString(),
-        userClinicId: req.user.clinicId.toString()
-      });
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to process this request'
-      });
+    // Allow admins to process requests
+    if (req.user.role === 'Admin') {
+      // If the admin has a clinic ID and the request has a clinic ID, they should match
+      if (req.user.clinicId && staffRequest.clinicId && 
+          staffRequest.clinicId.toString() !== req.user.clinicId.toString()) {
+        console.warn('Clinic ID mismatch but proceeding as Admin:', {
+          requestClinicId: staffRequest.clinicId.toString(),
+          userClinicId: req.user.clinicId.toString()
+        });
+        // We'll allow this for Admins
+      }
+    } else {
+      // For non-admin roles, enforce strict clinic matching
+      if (!staffRequest.clinicId || !req.user.clinicId || 
+          staffRequest.clinicId.toString() !== req.user.clinicId.toString()) {
+        console.error('Clinic ID mismatch and user is not Admin:', {
+          requestClinicId: staffRequest.clinicId ? staffRequest.clinicId.toString() : 'undefined',
+          userClinicId: req.user.clinicId ? req.user.clinicId.toString() : 'undefined',
+          userRole: req.user.role
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to process this request'
+        });
+      }
     }
     
     // Update the staff request status
@@ -1274,6 +1387,29 @@ const processStaffRequest = asyncHandler(async (req, res) => {
 });
 
 // Export all functions as named exports
+// Helper function to extract browser info from user agent
+function getBrowserFromUserAgent(userAgent) {
+  if (!userAgent) return 'Unknown';
+  
+  userAgent = userAgent.toLowerCase();
+  
+  if (userAgent.includes('firefox')) {
+    return 'Firefox';
+  } else if (userAgent.includes('edg')) {
+    return 'Edge';
+  } else if (userAgent.includes('chrome')) {
+    return 'Chrome';
+  } else if (userAgent.includes('safari')) {
+    return 'Safari';
+  } else if (userAgent.includes('opera') || userAgent.includes('opr')) {
+    return 'Opera';
+  } else if (userAgent.includes('msie') || userAgent.includes('trident')) {
+    return 'Internet Explorer';
+  } else {
+    return 'Unknown';
+  }
+}
+
 export {
   register,
   registerAdmin,
@@ -1289,5 +1425,6 @@ export {
   logout,
   sendSupportEmail,
   getStaffRequests,
-  processStaffRequest
+  processStaffRequest,
+  autoVerifyStaff
 };

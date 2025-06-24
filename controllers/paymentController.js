@@ -3,6 +3,9 @@ import { ErrorResponse } from '../utils/errorResponse.js';
 import asyncHandler from '../middleware/asyncHandler.js';
 import paymentService from '../services/paymentService.js';
 import Clinic from '../models/Clinic.js';
+import Subscription from '../models/Subscription.js';
+import SubscriptionPlan from '../models/SubscriptionPlan.js';
+import crypto from 'crypto';
 
 // @desc    Create new payment
 // @route   POST /api/payments
@@ -208,6 +211,68 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     data: history
+  });
+});
+
+// @desc    Create Razorpay order for subscription
+// @route   POST /api/payments/subscription/razorpay/create-order
+// @access  Private/Admin/Clinic Owner
+export const createRazorpayOrder = asyncHandler(async (req, res) => {
+  const { clinicId, plan, amount, billingCycle, currency } = req.body;
+  
+  // Validate required fields
+  if (!clinicId || !plan || !amount || !billingCycle) {
+    throw new ErrorResponse('Missing required fields', 400);
+  }
+  
+  // Check if clinic exists
+  const clinic = await Clinic.findById(clinicId);
+  if (!clinic) {
+    throw new ErrorResponse('Clinic not found', 404);
+  }
+  
+  // Check if subscription plan exists
+  const subscriptionPlan = await SubscriptionPlan.findOne({ name: plan });
+  if (!subscriptionPlan) {
+    throw new ErrorResponse('Subscription plan not found', 404);
+  }
+  
+  // Create Razorpay order
+  const orderData = await paymentService.createRazorpayOrder({
+    clinicId,
+    plan,
+    amount,
+    billingCycle,
+    currency: currency || 'INR'
+  });
+  
+  res.status(200).json({
+    success: true,
+    data: orderData
+  });
+});
+
+// @desc    Verify and process Razorpay payment
+// @route   POST /api/payments/subscription/razorpay/verify
+// @access  Private/Admin/Clinic Owner
+export const verifyRazorpayPayment = asyncHandler(async (req, res) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+  
+  // Validate required fields
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    throw new ErrorResponse('Missing payment verification details', 400);
+  }
+  
+  // Verify and process payment
+  const result = await paymentService.verifyRazorpayPayment({
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature
+  });
+  
+  res.status(200).json({
+    success: true,
+    data: result
   });
 });
 

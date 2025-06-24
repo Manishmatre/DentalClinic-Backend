@@ -75,6 +75,11 @@ const staffSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  employeeId: {
+    type: String,
+    unique: true,
+    trim: true
+  },
   email: {
     type: String,
     required: true,
@@ -89,6 +94,14 @@ const staffSchema = new mongoose.Schema({
   address: {
     type: String,
     trim: true
+  },
+  dateOfBirth: {
+    type: Date
+  },
+  gender: {
+    type: String,
+    trim: true,
+    enum: ['Male', 'Female', 'Other']
   },
   idNumber: {
     type: String,
@@ -120,6 +133,9 @@ const staffSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  joiningDate: {
+    type: Date
+  },
   education: [educationSchema],
   certifications: [certificationSchema],
   workExperience: [workExperienceSchema],
@@ -137,6 +153,16 @@ const staffSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  profileImage: {
+    url: {
+      type: String,
+      default: ''
+    },
+    publicId: {
+      type: String,
+      default: ''
+    }
   }
 }, {
   timestamps: true

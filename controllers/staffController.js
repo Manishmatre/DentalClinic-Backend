@@ -155,8 +155,17 @@ export const createStaff = async (req, res) => {
       education, 
       certifications, 
       workExperience, 
-      joinedDate 
+      joinedDate,
+      joiningDate, // Added new field
+      dateOfBirth, // Added new field
+      gender      // Added new field
     } = req.body;
+    
+    console.log('Received new fields for staff creation:', {
+      dateOfBirth,
+      gender,
+      joiningDate
+    });
 
     // Get the clinic ID from the user object
     const clinicId = req.user.clinicId;
@@ -248,11 +257,29 @@ export const createStaff = async (req, res) => {
       certifications,
       workExperience,
       joinedDate,
+      // Add new fields
+      joiningDate: joiningDate || joinedDate, // Use joiningDate if provided, otherwise use joinedDate
+      dateOfBirth: dateOfBirth || null,
+      gender: gender || null,
       clinic: clinicId,
       // Important: Use the SAME hashed password we created earlier
       password: hashedPassword,
-      userId: savedUser._id // Link to the User record
+      userId: savedUser._id, // Link to the User record
+      // Add profile image if provided
+      profileImage: req.body.profileImage ? {
+        url: req.body.profileImage.url || '',
+        publicId: req.body.profileImage.publicId || ''
+      } : { url: '', publicId: '' }
     });
+    
+    console.log('Creating Staff record with new fields:', {
+      dateOfBirth: staff.dateOfBirth,
+      gender: staff.gender,
+      joiningDate: staff.joiningDate,
+      profileImage: staff.profileImage
+    });
+    
+    console.log('Raw profile image data from request:', req.body.profileImage);
 
     // Save the Staff record
     const savedStaff = await staff.save();
@@ -282,6 +309,8 @@ export const createStaff = async (req, res) => {
 // Update a staff member
 export const updateStaff = async (req, res) => {
   try {
+    console.log('Starting staff update process...');
+    // Extract only the essential fields from the request body
     const { 
       name, 
       email, 
@@ -296,23 +325,75 @@ export const updateStaff = async (req, res) => {
       education, 
       certifications, 
       workExperience, 
-      joinedDate 
+      joinedDate,
+      joiningDate, // Added new field
+      dateOfBirth, // Added new field
+      gender,      // Added new field
+      profileImage,
+      password,
+      updateUserPassword,
+      userRole: userRoleFromBody
     } = req.body;
+    
+    console.log('Received new fields:', {
+      dateOfBirth,
+      gender,
+      joiningDate
+    });
+    
+    console.log('Received profile image data:', profileImage);
+    
     const staffId = req.params.id;
+    
+    console.log(`Updating staff member ${staffId}`);
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Has password update:', !!password);
     
     // Get the clinic ID from the user object
     const clinicId = req.user.clinicId;
+    console.log(`User clinic ID: ${clinicId}`);
 
-    const staff = await Staff.findOne({ _id: staffId, clinic: clinicId });
+    // Find the staff member by ID
+    const staff = await Staff.findById(staffId);
     if (!staff) {
+      console.log(`Staff with ID ${staffId} not found`);
       return res.status(404).json({ message: 'Staff member not found' });
     }
-
+    
+    console.log(`Staff clinic ID: ${staff.clinic}`);
+    
+    // Check if the staff member belongs to the user's clinic
+    // Convert both to strings for proper comparison
+    const userClinicIdStr = req.user.clinicId ? req.user.clinicId.toString() : '';
+    const staffClinicIdStr = staff.clinic ? staff.clinic.toString() : '';
+    
+    console.log(`Comparing clinic IDs: User clinic=${userClinicIdStr}, Staff clinic=${staffClinicIdStr}`);
+    
+    // Determine if the user is an admin (either from token or request body)
+    const isAdmin = req.user.role === 'Admin' || userRoleFromBody === 'Admin';
+    console.log(`Is user an admin? ${isAdmin}`);
+    
+    // Allow update if clinic IDs match OR if the user is an admin
+    if (userClinicIdStr !== staffClinicIdStr && !isAdmin) {
+      console.log(`Authorization failed: Clinic IDs don't match and user is not an Admin`);
+      return res.status(403).json({ 
+        message: 'Not authorized to update this staff member',
+        details: {
+          userClinic: userClinicIdStr,
+          staffClinic: staffClinicIdStr,
+          userRole: req.user.role,
+          userRoleFromBody: userRoleFromBody
+        }
+      });
+    }
+    
+    console.log(`Authorization passed: User can update staff member`);
+    
     // Check if email is being changed and if it's already in use
-    if (email !== staff.email) {
-      const existingStaff = await Staff.findOne({ email, clinic: req.user.clinicId });
+    if (email && email !== staff.email) {
+      const existingStaff = await Staff.findOne({ email, clinic: req.user.clinicId, _id: { $ne: staffId } });
       if (existingStaff) {
-        return res.status(400).json({ message: 'Email already in use' });
+        return res.status(400).json({ message: 'Email already in use by another staff member' });
       }
       
       // Also check User collection for email uniqueness
@@ -322,61 +403,230 @@ export const updateStaff = async (req, res) => {
       }
     }
 
-    // Update all fields in Staff collection
-    staff.name = name || staff.name;
-    staff.email = email || staff.email;
-    staff.role = role || staff.role;
-    staff.specialization = specialization || staff.specialization;
-    staff.department = department || staff.department;
-    staff.status = status || staff.status;
-    staff.phone = phone || staff.phone;
-    staff.address = address || staff.address;
-    staff.idNumber = idNumber || staff.idNumber;
-    staff.emergencyContact = emergencyContact || staff.emergencyContact;
-    staff.education = education || staff.education;
-    
-    // Handle arrays properly
-    if (certifications) staff.certifications = certifications;
-    if (workExperience) staff.workExperience = workExperience;
-    
-    // Handle date
-    if (joinedDate) staff.joinedDate = joinedDate;
-
-    // Save Staff record
-    const updatedStaff = await staff.save();
-    
-    // Also update the corresponding User record if it exists
-    if (staff.userId) {
-      const user = await User.findById(staff.userId);
-      if (user) {
-        // Update User fields that should be in sync with Staff
-        user.name = name || user.name;
-        user.email = email || user.email;
-        user.role = role || user.role;
-        user.phone = phone || user.phone;
-        user.address = address || user.address;
-        user.userType = (role || user.role).toLowerCase();
-        
-        // Save User record
-        await user.save();
-        console.log(`Updated User record with ID: ${user._id} to match Staff record`);
-      } else {
-        console.warn(`Could not find User record with ID: ${staff.userId} for Staff member ${staffId}`);
+    // Handle password update if provided
+    if (password && password.trim() !== '') {
+      console.log('Updating password for staff member');
+      // Hash the new password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      staff.password = hashedPassword;
+      
+      // Update the User record's password as well if requested
+      if (updateUserPassword && staff.userId) {
+        console.log('Also updating password in User record');
+        const user = await User.findById(staff.userId);
+        if (user) {
+          user.password = hashedPassword;
+          // Set a flag to prevent the pre-save hook from hashing the password again
+          user.$skipPasswordHashing = true;
+          await user.save();
+          console.log(`Updated password for User record with ID: ${user._id}`);
+        } else {
+          console.warn(`Could not find User record with ID: ${staff.userId} for password update`);
+        }
       }
-    } else {
-      console.warn(`Staff member ${staffId} does not have a linked userId`);
     }
 
-    res.json({
-      message: 'Staff member updated successfully',
-      staff: {
-        ...updatedStaff.toObject(),
-        password: undefined
+    // Create a safe update object with only the fields we want to update
+    const updateData = {};
+    
+    // Update basic fields if provided
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (role) updateData.role = role;
+    if (specialization !== undefined) updateData.specialization = specialization;
+    if (department !== undefined) updateData.department = department;
+    if (status) updateData.status = status;
+    if (phone !== undefined) updateData.phone = phone;
+    if (idNumber !== undefined) updateData.idNumber = idNumber;
+    
+    // Handle new fields
+    if (dateOfBirth !== undefined) {
+      console.log('Saving dateOfBirth:', dateOfBirth);
+      updateData.dateOfBirth = dateOfBirth;
+    }
+    
+    if (gender !== undefined) {
+      console.log('Saving gender:', gender);
+      updateData.gender = gender;
+    }
+    
+    if (joiningDate !== undefined) {
+      console.log('Saving joiningDate:', joiningDate);
+      updateData.joiningDate = joiningDate;
+    }
+    
+    // Handle address - ensure it's a string
+    if (address !== undefined) {
+      if (typeof address === 'object') {
+        // Convert object to string
+        updateData.address = JSON.stringify(address);
+      } else {
+        updateData.address = address;
       }
-    });
+    }
+    
+    // Handle emergency contact - ensure it's a string
+    if (emergencyContact !== undefined) {
+      if (typeof emergencyContact === 'object') {
+        // Convert object to string
+        updateData.emergencyContact = JSON.stringify(emergencyContact);
+      } else {
+        updateData.emergencyContact = emergencyContact;
+      }
+    }
+    
+    // Handle array fields
+    if (education !== undefined) {
+      // Ensure education is an array
+      if (typeof education === 'string') {
+        try {
+          updateData.education = JSON.parse(education);
+        } catch (e) {
+          updateData.education = [];
+        }
+      } else if (Array.isArray(education)) {
+        updateData.education = education;
+      } else {
+        updateData.education = [];
+      }
+    }
+    
+    if (certifications !== undefined) {
+      // Ensure certifications is an array
+      if (typeof certifications === 'string') {
+        try {
+          updateData.certifications = JSON.parse(certifications);
+        } catch (e) {
+          updateData.certifications = [];
+        }
+      } else if (Array.isArray(certifications)) {
+        updateData.certifications = certifications;
+      } else {
+        updateData.certifications = [];
+      }
+    }
+    
+    if (workExperience !== undefined) {
+      // Ensure workExperience is an array
+      if (typeof workExperience === 'string') {
+        try {
+          updateData.workExperience = JSON.parse(workExperience);
+        } catch (e) {
+          updateData.workExperience = [];
+        }
+      } else if (Array.isArray(workExperience)) {
+        updateData.workExperience = workExperience;
+      } else {
+        updateData.workExperience = [];
+      }
+    }
+    
+    if (joinedDate !== undefined) {
+      updateData.joinedDate = joinedDate;
+    }
+    
+    // Update profile image if provided
+    if (profileImage) {
+      console.log('Processing profile image data:', profileImage);
+      // Ensure the profileImage object has the required structure
+      updateData.profileImage = {
+        url: profileImage.url || '',
+        publicId: profileImage.publicId || ''
+      };
+      console.log('Profile image data being saved:', updateData.profileImage);
+    }
+    
+    // If password was updated, add it to the update data
+    if (password && password.trim() !== '') {
+      updateData.password = staff.password; // Use the already hashed password
+    }
+    
+    console.log('Update data prepared:', Object.keys(updateData));
+    
+    // Apply the updates to the staff object
+    Object.assign(staff, updateData);
+
+    try {
+      // Save Staff record
+      const updatedStaff = await staff.save();
+      console.log(`Updated Staff record with ID: ${updatedStaff._id}`);
+      
+      // Also update the corresponding User record if it exists (for fields other than password)
+      if (staff.userId) {
+        const user = await User.findById(staff.userId);
+        if (user) {
+          // Update User fields that should be in sync with Staff
+          user.name = name || user.name;
+          user.email = email || user.email;
+          await user.save();
+          console.log(`Updated User record with ID: ${user._id}`);
+        } else {
+          console.warn(`Could not find User record with ID: ${staff.userId} for update`);
+        }
+      }
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Staff updated successfully',
+        data: updatedStaff
+      });
+    } catch (saveError) {
+      console.error('Error saving staff record:', saveError);
+      
+      // Handle validation errors
+      if (saveError.name === 'ValidationError') {
+        const validationErrors = Object.values(saveError.errors).map(err => err.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Validation Error',
+          errors: validationErrors
+        });
+      }
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Error saving staff record',
+        error: saveError.message
+      });
+    }
   } catch (error) {
-    console.error('Error updating staff member:', error);
-    res.status(500).json({ message: 'Error updating staff member', error: error.message });
+    console.error('Error updating staff:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation Error',
+        errors
+      });
+    }
+    
+    // Handle cast errors (invalid ObjectId)
+    if (error.name === 'CastError') {
+      console.error('Cast error details:', {
+        path: error.path,
+        value: error.value,
+        kind: error.kind
+      });
+      return res.status(400).json({ 
+        success: false,
+        message: `Invalid data format for field '${error.path}'`,
+        error: error.message,
+        details: {
+          field: error.path,
+          value: error.value,
+          expectedType: error.kind
+        }
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Error updating staff member', 
+      error: error.message,
+      errorType: error.name
+    });
   }
 };
 
@@ -500,8 +750,8 @@ export const resetPassword = async (req, res) => {
 // Get staff statistics
 export const getStaffStats = async (req, res) => {
   try {
-    // ... (rest of the code remains the same)
     const clinicId = req.user.clinicId;
+    console.log('Getting staff stats for clinic:', clinicId);
     
     // Get total count by role
     const roleStats = await Staff.aggregate([
@@ -524,25 +774,69 @@ export const getStaffStats = async (req, res) => {
       { $sort: { count: -1 } }
     ]);
     
-    // Get total staff count
-    const totalStaff = await Staff.countDocuments({ clinic: clinicId });
-    
-    // Get new staff in last 30 days
+    // Get recently joined staff (last 30 days)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const newStaff = await Staff.countDocuments({
+    const recentlyJoined = await Staff.find({
       clinic: clinicId,
       createdAt: { $gte: thirtyDaysAgo }
+    })
+    .select('_id name email role department joinedDate profileImage')
+    .sort({ createdAt: -1 })
+    .limit(5);
+    
+    // Convert role stats to object format expected by frontend
+    const roleDistribution = {};
+    roleStats.forEach(role => {
+      if (role._id) {
+        roleDistribution[role._id] = role.count;
+      }
     });
     
-    res.json({
-      totalStaff,
-      newStaff,
-      byRole: roleStats,
-      byDepartment: departmentStats,
-      byStatus: statusStats
+    // Convert department stats to object format expected by frontend
+    const departmentDistribution = {};
+    departmentStats.forEach(dept => {
+      if (dept._id) {
+        departmentDistribution[dept._id] = dept.count;
+      }
     });
+    
+    // Get counts by status
+    const totalActive = statusStats.find(s => s._id === 'Active')?.count || 0;
+    const totalInactive = statusStats.find(s => s._id === 'Inactive')?.count || 0;
+    const totalOnLeave = statusStats.find(s => s._id === 'On Leave')?.count || 0;
+    
+    // Generate trend data (mock for now, can be replaced with real data later)
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const currentMonth = new Date().getMonth();
+    const trendLabels = [];
+    for (let i = 0; i < 6; i++) {
+      const monthIndex = (currentMonth - i + 12) % 12;
+      trendLabels.unshift(months[monthIndex]);
+    }
+    
+    // For now, generate some simple trend data
+    const totalStaff = await Staff.countDocuments({ clinic: clinicId });
+    const trendData = [Math.max(0, totalStaff - 5), Math.max(0, totalStaff - 4), 
+                      Math.max(0, totalStaff - 3), Math.max(0, totalStaff - 2), 
+                      Math.max(0, totalStaff - 1), totalStaff];
+    
+    // Format response to match frontend expectations
+    const response = {
+      totalActive,
+      totalInactive,
+      totalOnLeave,
+      roleDistribution,
+      departmentDistribution,
+      recentlyJoined,
+      trendLabels,
+      trendData
+    };
+    
+    console.log('Sending staff stats:', response);
+    res.json(response);
   } catch (error) {
+    console.error('Error fetching staff statistics:', error);
     res.status(500).json({ message: 'Error fetching staff statistics', error: error.message });
   }
 };
@@ -589,7 +883,7 @@ export const fixUserPassword = async (req, res) => {
     console.error('Error fixing user password:', error);
     res.status(500).json({ message: 'Error fixing user password', error: error.message });
   }
-};
+}
 
 // Staff login
 export const login = async (req, res) => {

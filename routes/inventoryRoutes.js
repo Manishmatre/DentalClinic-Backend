@@ -1,41 +1,28 @@
 import express from 'express';
 const router = express.Router();
-import {
-  createInventoryItem,
-  getInventoryItems,
-  getInventoryItemById,
-  updateInventoryItem,
-  deleteInventoryItem,
-  createInventoryTransaction,
-  getInventoryTransactions,
-  getTransactionsByItem,
-  getInventoryStats
-} from '../controllers/inventoryController.js';
-import { protect, authorize } from '../middleware/authMiddleware.js';
+import * as inventoryController from '../controllers/inventoryController.js';
+import { authenticate, authorizeRoles as authorize } from '../middleware/auth.js';
 
-// All inventory routes require authentication
-router.use(protect);
+// Apply authentication middleware to all routes
+router.use(authenticate);
 
-// Routes for inventory items
-router.route('/items')
-  .post(authorize('admin'), createInventoryItem)
-  .get(authorize('admin', 'doctor', 'staff'), getInventoryItems);
+// Inventory items routes
+router.get('/', inventoryController.getInventoryItems);
+router.get('/:id', inventoryController.getInventoryItemById);
+router.post('/', authorize(['admin', 'inventory_manager']), inventoryController.createInventoryItem);
+router.put('/:id', authorize(['admin', 'inventory_manager']), inventoryController.updateInventoryItem);
+router.delete('/:id', authorize(['admin']), inventoryController.deleteInventoryItem);
+// Stock update is handled through the updateInventoryItem function
+// router.post('/:id/stock', authorize(['admin', 'inventory_manager']), inventoryController.updateStock);
 
-router.route('/items/:id')
-  .get(authorize('admin', 'doctor', 'staff'), getInventoryItemById)
-  .put(authorize('admin'), updateInventoryItem)
-  .delete(authorize('admin'), deleteInventoryItem);
+// Category routes - functions not found in controller, commenting out for now
+// router.get('/categories', inventoryController.getCategories);
+// router.post('/categories', authorize(['admin']), inventoryController.createCategory);
 
-// Routes for inventory transactions
-router.route('/transactions')
-  .post(authorize('admin', 'staff'), createInventoryTransaction)
-  .get(authorize('admin', 'staff'), getInventoryTransactions);
+// Transaction routes
+router.get('/transactions', inventoryController.getInventoryTransactions);
 
-router.route('/transactions/item/:itemId')
-  .get(authorize('admin', 'staff'), getTransactionsByItem);
-
-// Route for inventory statistics
-router.route('/stats')
-  .get(authorize('admin'), getInventoryStats);
+// Statistics route
+router.get('/statistics', inventoryController.getInventoryStats);
 
 export default router;

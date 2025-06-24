@@ -2,41 +2,42 @@
 // Define endpoints for managing doctor profiles and schedules
 
 import express from 'express';
-import doctorController from '../controllers/doctorController.js';
 import { authenticate } from '../middleware/auth.js';
+import { authorizeRoles, authorizeClinic } from '../middleware/authorizeRoles.js';
+import {
+  getDoctors,
+  getDoctorById,
+  createDoctor,
+  updateDoctor,
+  deleteDoctor,
+  getDoctorSchedule,
+  getDoctorAppointments
+} from '../controllers/doctorController.js';
 
 const router = express.Router();
 
-// Get all doctors
-// GET /staff/doctors
-router.get('/', doctorController.getDoctors);
+// Middleware to ensure all routes in this file require authentication and clinic context
+router.use(authenticate, authorizeClinic());
 
-// Get doctor by ID
-// GET /staff/doctors/:id
-router.get('/:id', doctorController.getDoctorById);
+// Get all doctors for the clinic
+router.get('/', authorizeRoles('Admin', 'Receptionist', 'Doctor'), getDoctors);
 
-// Get doctors by specialty
-// GET /staff/doctors/specialty?specialty=<specialty>
-router.get('/specialty', doctorController.getDoctorsBySpecialty);
+// Get a specific doctor by ID
+router.get('/:id', authorizeRoles('Admin', 'Receptionist', 'Doctor'), getDoctorById);
 
-// Get doctor availability
-// GET /staff/doctors/:id/availability?date=<date>
-router.get('/:id/availability', doctorController.getDoctorAvailability);
+// Create a new doctor (Admin only)
+router.post('/', authorizeRoles('Admin'), createDoctor);
 
-// Get doctor schedule
-// GET /staff/doctors/:id/schedule?startDate=<startDate>&endDate=<endDate>
-router.get('/:id/schedule', doctorController.getDoctorSchedule);
+// Update a doctor (Admin only)
+router.put('/:id', authorizeRoles('Admin'), updateDoctor);
 
-// Create a new doctor
-// POST /staff/doctors
-router.post('/', authenticate, doctorController.createDoctor);
+// Delete a doctor (Admin only)
+router.delete('/:id', authorizeRoles('Admin'), deleteDoctor);
 
-// Update doctor
-// PUT /staff/doctors/:id
-router.put('/:id', authenticate, doctorController.updateDoctor);
+// Get doctor's schedule
+router.get('/:id/schedule', authorizeRoles('Admin', 'Receptionist', 'Doctor'), getDoctorSchedule);
 
-// Delete doctor
-// DELETE /staff/doctors/:id
-router.delete('/:id', authenticate, doctorController.deleteDoctor);
+// Get doctor's appointments
+router.get('/:id/appointments', authorizeRoles('Admin', 'Receptionist', 'Doctor'), getDoctorAppointments);
 
 export default router;
